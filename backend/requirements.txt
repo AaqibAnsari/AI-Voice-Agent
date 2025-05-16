@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+aiortc
+pydantic
+openai
+numpy
+torch       # for silero-vad
+#silero-vad  # pip-installable wrapper or via GitHub
+requests    # for ElevenLabs
+python-dotenv

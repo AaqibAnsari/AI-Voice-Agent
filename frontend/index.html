@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>AI Voice Agent</title>
+    <style>
+       /* Base reset */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Page background & font */
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: linear-gradient(135deg, #e0eafc 0%, #cfdef3 100%);
+  padding: 40px;
+  color: #333;
+  max-width: 600px;
+  margin: auto;
+}
+
+/* Title */
+h1 {
+  text-align: center;
+  margin-bottom: 30px;
+  font-size: 2.5rem;
+  color: #1a2a6c;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+}
+
+/* Button group */
+.button-group {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+/* Neumorphic buttons */
+button {
+  background: #e0e0e0;
+  border: none;
+  padding: 14px 24px;
+  border-radius: 12px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow:  6px 6px 16px rgba(163,177,198,0.6),
+              -6px -6px 16px rgba(255,255,255,0.5);
+}
+
+button:active {
+  box-shadow: inset 4px 4px 8px rgba(163,177,198,0.6),
+              inset -4px -4px 8px rgba(255,255,255,0.5);
+}
+
+button:hover {
+  transform: translateY(-2px);
+}
+
+/* Glass‑morphic log panel */
+#log {
+  background: rgba(255,255,255,0.25);
+  backdrop-filter: blur(10px);
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.4);
+  max-height: 350px;
+  overflow-y: auto;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  box-shadow: 0 8px 32px rgba(31, 38, 135, 0.1);
+}
+
+/* Individual entries */
+.log-entry {
+  margin-bottom: 12px;
+}
+
+/* User / Agent labels */
+.user {
+  color: #0056b3;
+  font-weight: 600;
+}
+
+.agent {
+  color: #186a3b;
+  font-weight: 600;
+}
+
+/* Audio control styling */
+#playback {
+  display: block;
+  margin: 30px auto 0;
+  width: 100%;
+  max-width: 500px;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+}
+
+    </style>
+</head>
+<body>
+
+<h1>🎙️ AI Voice Agent</h1>
+
+<div class="button-group">
+    <button id="record">Start Recording</button>
+    <button id="stop">Stop Recording</button>
+</div>
+
+<div id="log"></div>
+<audio id="playback" controls></audio>
+
+<script>
+    const recordBtn = document.getElementById('record');
+    const stopBtn = document.getElementById('stop');
+    const logDiv = document.getElementById('log');
+    const playback = document.getElementById('playback');
+
+    let ws, mediaStream, audioCtx, processor, input;
+    let receivedAudioChunks = [];
+    let isRecording = false;
+    let backendProcessing = false; // Track if backend is processing
+
+    function log(text, type = '') {
+        const div = document.createElement('div');
+        div.classList.add('log-entry');
+        if (type) div.classList.add(type);
+        div.innerHTML = text;
+        logDiv.appendChild(div);
+        logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function convertFloat32ToInt16(buffer) {
+        const l = buffer.length;
+        const result = new Int16Array(l);
+        for (let i = 0; i < l; i++) {
+            let s = Math.max(-1, Math.min(1, buffer[i]));
+            result[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        return result;
+    }
+
+    async function startRecording() {
+        if (isRecording) return;
+        isRecording = true;
+        backendProcessing = true; // Assume backend starts processing
+        receivedAudioChunks = [];
+
+        ws = new WebSocket(`ws://${location.hostname}:8000/ws`);
+        ws.binaryType = 'arraybuffer';
+        ws.onopen = () => log('🟢 <i>WebSocket connected</i>');
+
+        ws.onmessage = async evt => {
+            if (typeof evt.data === 'string') {
+                const msg = JSON.parse(evt.data);
+                if (msg.type === 'transcript') log(`<span class="user">You:</span> ${msg.text}`, 'user');
+                if (msg.type === 'response_text') {
+                    log(`<span class="agent">Agent:</span> ${msg.text}`, 'agent');
+                }
+                if (msg.type === 'error') {
+                    log(`❌ Error from backend: ${msg.text}`, 'error');
+                    backendProcessing = false; // Processing ended due to error
+                    enableRecordButton();
+                    disableStopButton();
+                }
+                if (msg.type === 'log') {
+                    log(`📜 ${msg.text}`);
+                }
+            } else {
+                receivedAudioChunks.push(evt.data);
+                const blob = new Blob(receivedAudioChunks, { type: 'audio/mpeg' });
+                playback.src = URL.createObjectURL(blob);
+                playback.play();
+            }
+            // Consider the processing complete after receiving audio chunks
+            if (evt.data instanceof ArrayBuffer && receivedAudioChunks.length > 0) {
+                backendProcessing = false;
+                enableRecordButton();
+                disableStopButton();
+            }
+        };
+
+        ws.onclose = () => {
+            log('🔴 <i>WebSocket disconnected</i>');
+            isRecording = false;
+            backendProcessing = false;
+            enableRecordButton();
+            disableStopButton();
+        };
+        ws.onerror = err => {
+            log(`❌ WebSocket error: ${err}`);
+            isRecording = false;
+            backendProcessing = false;
+            enableRecordButton();
+            disableStopButton();
+        };
+
+        try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, sampleRate: 16000 });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+
+            input = audioCtx.createMediaStreamSource(mediaStream);
+            processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+            processor.onaudioprocess = e => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    const pcm = convertFloat32ToInt16(inputData);
+                    ws.send(pcm.buffer);
+                }
+            };
+
+            input.connect(processor);
+            processor.connect(audioCtx.destination);
+
+            log('🎤 <i>Recording started...</i>');
+            disableRecordButton();
+            enableStopButton();
+
+        } catch (err) {
+            log(`❌ Error accessing microphone: ${err}`);
+            isRecording = false;
+            backendProcessing = false;
+            enableRecordButton();
+            disableStopButton();
+        }
+    }
+
+    async function stopRecording() {
+        if (!isRecording) return;
+        isRecording = false;
+
+        if (processor) {
+            processor.disconnect();
+            input.disconnect();
+        }
+        if (audioCtx) audioCtx.close();
+        if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(new ArrayBuffer(0)); // Signal end of stream
+            log('📨 <i>Sent end-of-stream signal to backend</i>');
+            // DO NOT CLOSE HERE. Allow backend to send response.
+            // The connection will eventually close due to inactivity or page closure.
+        }
+        log('🛑 <i>Recording stopped</i>');
+        // Keep stop button disabled until response is received or error occurs
+        disableStopButton();
+    }
+
+    function enableRecordButton() {
+        recordBtn.disabled = false;
+    }
+
+    function disableRecordButton() {
+        recordBtn.disabled = true;
+    }
+
+    function enableStopButton() {
+        stopBtn.disabled = false;
+    }
+
+    function disableStopButton() {
+        stopBtn.disabled = true;
+    }
+
+    // Close the WebSocket connection when the page is closed
+    window.onbeforeunload = () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+        }
+    };
+
+    recordBtn.onclick = startRecording;
+    stopBtn.onclick = stopRecording;
+
+    // Initially disable the stop button
+    disableStopButton();
+</script>
+
+</body>
+</html>

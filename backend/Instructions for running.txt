@@ -1,0 +1,12 @@
+1)First install the requirements.txt using :
+pip install -r requirements.txt
+
+2) Run backend server using:
+uvicorn app:app --host 0.0.0.0 --port 8000 
+(in backend folder)
+
+
+3) For frontend it is started as follows:
+python -m http.server 3000
+(make sure you are in frontend folder)
+
